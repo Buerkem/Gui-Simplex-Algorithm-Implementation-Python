@@ -1,293 +1,417 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QTableWidget, QTableWidgetItem, QMessageBox
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QVBoxLayout,QLabel,QComboBox,QPushButton,QHBoxLayout,QSizePolicy
-import sympy
-import numpy as np
-import augment as augment
-import simplex as sp
-M = sympy.Symbol('M', positive=True)
-HEADER_SPACE=11
-
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super(MainWindow,self).__init__()
-        self.setWindowTitle("Simplex Solver")
-        self.CONSTRAINT_EQUALITY_SIGNS = [u"\u2264", u"\u2265", "="]#you can choose either <=,>=,= for constraint
-        self.new_widgets = []#list to keep track of all new widgets created(like those to show iteration so that they can easily be deleted
-        #when a new problem is given
-
-        self.create_ui()
-        self.set_ui_layout()
-
-        self.setFixedWidth(self.sizeHint().width()+100)
-        self.setWindowFlags(Qt.WindowCloseButtonHint|Qt.WindowMinimizeButtonHint)
-
-    def create_ui(self):
-        self.objective_function_label = QLabel("Objective function", self)
-        self.objective_function_label.setFixedHeight(self.objective_function_label.sizeHint().height())
-        self.objective_fxn_table = self.create_table(1, 4, ["="], self.create_header_labels(2))
-
-        z_item = QTableWidgetItem("Z")
-        self.objective_fxn_table.setItem(0, 3, z_item)
-        z_item.setFlags(Qt.ItemIsEnabled)
-
-        #make the objective fxn table's size fit perfectly with the rows
-        self.objective_fxn_table.setSizePolicy(QSizePolicy.Minimum,QSizePolicy.Minimum)
-        self.objective_fxn_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.objective_fxn_table.resizeColumnsToContents()
-        self.objective_fxn_table.setFixedHeight(self.objective_fxn_table.verticalHeader().length()+self.objective_fxn_table.horizontalHeader().height())
-
-        self.constraints_label = QLabel("Constraints Matrix", self)
-        self.constraints_label.setFixedHeight(self.constraints_label.sizeHint().height())
-        self.constraint_table = self.create_table(2, 4, self.CONSTRAINT_EQUALITY_SIGNS, self.create_header_labels(2))
-        self.constraint_table.setFixedHeight(self.constraint_table.sizeHint().height())
-
-        self.answers_label = QLabel()
-
-        self.add_row_btn = QPushButton('Add Row', self)
-        self.add_row_btn.clicked.connect(self.add_row_event)
-        self.add_col_btn = QPushButton('Add Column', self)
-        self.add_col_btn.clicked.connect(self.add_column_event)
-        self.del_row_btn = QPushButton("Delete Row", self)
-        self.del_row_btn.clicked.connect(self.del_row_event)
-        self.del_col_btn = QPushButton("Delete Column", self)
-        self.del_col_btn.clicked.connect(self.del_col_event)
-        self.solve_btn = QPushButton('Solve', self)
-        self.solve_btn.clicked.connect(self.solve_event)
-
-        self.operation_combo = QComboBox()
-        for item in ["Maximize", "Minimize"]:
-            self.operation_combo.addItem(item)
-
-    def set_ui_layout(self):
-        vbox_layout1 = QHBoxLayout(self)
-        self.vbox_layout2 = QVBoxLayout(self)
-
-        vbox_layout1.addWidget(self.add_row_btn)
-        vbox_layout1.addWidget(self.add_col_btn)
-        vbox_layout1.addWidget(self.del_row_btn)
-        vbox_layout1.addWidget(self.del_col_btn)
-        vbox_layout1.addWidget(self.operation_combo)
-        vbox_layout1.addWidget(self.solve_btn)
-
-        central_widget = QWidget(self)
-        self.setCentralWidget(central_widget)
-
-        main_v_layout = QVBoxLayout(self)
-        central_widget.setLayout(main_v_layout)
-
-        self.vbox_layout2.addWidget(self.objective_function_label)
-        self.vbox_layout2.addWidget(self.objective_fxn_table)
-        self.vbox_layout2.addWidget(self.constraints_label)
-        self.vbox_layout2.addWidget(self.constraint_table)
-        self.vbox_layout2.addWidget(self.answers_label)
-
-        main_v_layout.addLayout(vbox_layout1)
-        main_v_layout.addLayout(self.vbox_layout2)
-
-    def create_table(self, rows, cols,equality_signs=None, horizontal_headers=None,vertical_headers=None):
-        table = QTableWidget(self)
-        table.setColumnCount(cols)
-        table.setRowCount(rows)
-
-        # Set the table headers
-        if horizontal_headers:
-            table.setHorizontalHeaderLabels(horizontal_headers)
-
-        if vertical_headers:
-            table.setVerticalHeaderLabels(vertical_headers)
-
-        #add <=,>=,= signs so that person can select the whether that constraint is <=,>= or =
-        #its also used for the objective fxn but in the objective fxn we just use = Z so an [=] sign is passed
-        #for equality signs in the creation of the objective fxn table in the create_ui function
-        if equality_signs:
-            numofrows = table.rowCount()
-            numofcols = table.columnCount()
-            # add combo items to self.constraint_table
-            for index in range(numofrows):
-                equality_signs_combo = QComboBox()
-                for item in equality_signs:
-                    equality_signs_combo.addItem(item)
-                table.setCellWidget(index, numofcols - 2, equality_signs_combo)
-
-        # Do the resize of the columns by content
-        table.resizeColumnsToContents()
-        table.resizeRowsToContents()
-
-        return table
-
-    def create_header_labels(self,num_of_variables):
-        """Name the columns for the tables x1,x2,.... give a space and then add bi"""
-        header_labels = [" "*HEADER_SPACE +"x" + str(i + 1) + " " * HEADER_SPACE for i in range(num_of_variables)]
-        header_labels.extend([" " * HEADER_SPACE, " " * HEADER_SPACE + "bi" + " " * HEADER_SPACE])
-        return header_labels
-
-    def del_row_event(self):
-        #allow a maximum of one constraint
-        if self.constraint_table.rowCount()>1:
-            self.constraint_table.removeRow(self.constraint_table.rowCount()-1)
-
-    def del_col_event(self):
-        #if we have x1,x2 and the signs and bi column don't allow deletion of column, else delete
-        if self.constraint_table.columnCount()>4:
-            self.constraint_table.removeColumn(self.constraint_table.columnCount()-3)
-            self.objective_fxn_table.removeColumn(self.objective_fxn_table.columnCount()-3)
-
-    def add_column_event(self):
-        self.constraint_table.insertColumn(self.constraint_table.columnCount()-2)
-        self.objective_fxn_table.insertColumn(self.objective_fxn_table.columnCount()-2)
-        self.constraint_table.setHorizontalHeaderLabels(self.create_header_labels(self.constraint_table.columnCount()-2))
-        self.objective_fxn_table.setHorizontalHeaderLabels(self.create_header_labels(self.constraint_table.columnCount()-2))
-
-        # make the objective fxn table's size fit perfectly with the rows and columns
-        self.objective_fxn_table.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
-        self.objective_fxn_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.objective_fxn_table.setFixedHeight(self.objective_fxn_table.verticalHeader().length() + self.objective_fxn_table.horizontalHeader().height())
-
-    def add_row_event(self):
-        self.constraint_table.insertRow(self.constraint_table.rowCount())
-        equality_signs_combo = QComboBox()
-        for item in self.CONSTRAINT_EQUALITY_SIGNS:
-            equality_signs_combo.addItem(item)
-        self.constraint_table.setCellWidget(self.constraint_table.rowCount()-1,self.constraint_table.columnCount() - 2, equality_signs_combo)
-        self.constraint_table.resizeRowsToContents()
+from PyQt5 import QtCore, QtGui, QtWidgets
+from scipy.optimize import linprog
+from numpy import multiply
 
 
-    def solve_event(self):
-        #delete any new widgets created when a problem was being solved such as the iteration's table
-        for item in self.new_widgets:
-            item.setParent(None)
-            item.deleteLater()
+class Ui_MainWindow(object):
 
-        self.new_widgets=[]
-        augment.clear_basis_variable_column()
-        vertical_header=[]
 
-        #get all the constraint signs from the constraint table such as >= etc into a list
-        constraint_equality_signs=self.read_equality_signs(self.constraint_table.columnCount()-2, self.constraint_table)
-        #get the command whether it is maximize or minimize
-        command=self.operation_combo.currentText().lower()
+    def new(self):
+        self.msg.setWindowTitle("New")
+        self.msg.setText("New Calculation?")
+        op = self.msg.exec_()
+        if op == QtWidgets.QMessageBox.Ok:
+            self.cbObjetivo.setCurrentIndex(0)
+            self.txF1.clear()
+            self.txF2.clear()
+            self.txF3.clear()
+            self.txF4.clear()
+            self.txR11.clear()
+            self.txR12.clear()
+            self.txR13.clear()
+            self.txR14.clear()
+            self.cbS1.setCurrentIndex(0)
+            self.txB1.clear()
+            self.txR21.clear()
+            self.txR22.clear()
+            self.txR23.clear()
+            self.txR24.clear()
+            self.cbS2.setCurrentIndex(0)
+            self.txB2.clear()
+            self.txR31.clear()
+            self.txR32.clear()
+            self.txR33.clear()
+            self.txR34.clear()
+            self.cbS3.setCurrentIndex(0)
+            self.txB3.clear()
+            self.txResult.clear()
+            self.tabWidget.setCurrentIndex(0)
+            self.statusbar.clearMessage()
 
-        unaugmented_matrix=self.form_unaugmented_matrix()
-        augment_matrix = augment.get_augment_matrix(constraint_equality_signs, command)
+    def calculate(self):
+        try:
+            self.txResult.clear()
 
-        tableau = augment.get_tableau(unaugmented_matrix, augment_matrix)
-        #added variables are new ones introduced such as the slack and artificial variables
-        added_variables = augment.get_added_variables(augment_matrix)
-        #all variables are original x1,x2,etc in addition to the added variables
-        all_variables = augment.get_all_variables(unaugmented_matrix, added_variables)
-
-        basis_variables = augment.get_basis_variables(added_variables)
-        basis = augment.get_bi_values(basis_variables, all_variables, tableau)
-
-        sp.calculate_zj(tableau, basis)
-        sp.calculate_cj_zj(tableau, basis, command)
-
-        #header for basic variables,zj and cj-zj
-        vertical_header.append("cj       ")
-        vertical_header.extend(basis_variables)
-        vertical_header.append("zj")
-        if command.lower()=="minimize":
-            vertical_header.append("zj-cj")
-        else:
-            vertical_header.append("cj-zj")
-
-        spaced_all_variables = [" " * HEADER_SPACE + item + " " * HEADER_SPACE for item in all_variables]
-        gui_tableau = self.create_gui_for_tableau(tableau,spaced_all_variables,basis_variables)
-        current_row,current_col=tableau.shape
-        self.vbox_layout2.addWidget(gui_tableau)
-
-        #add the gui tableau to the new widgets so that it can be deleted when we are solving a new problem
-        self.new_widgets.append(gui_tableau)
-
-        hir = sp.get_greatest_increase_in_cj_zj_function(tableau)
-        hir = sp.get_comparable_expression_of(hir)
-
-        while hir > 0:  # while hir > 0, we can increase our z value
-            pivot_col_index = sp.get_pivot_col_index(tableau)
-            pivot_row_index = sp.get_pivot_row_index(tableau, pivot_col_index)
-            if pivot_row_index:
-                sp.get_new_rows(tableau, basis, all_variables, basis_variables, pivot_row_index, pivot_col_index)
-                sp.calculate_zj(tableau, basis)
-                sp.calculate_cj_zj(tableau, basis, command)
-
-                hir = sp.get_greatest_increase_in_cj_zj_function(tableau)
-
-                hir = sp.get_comparable_expression_of(hir)
-
-                vertical_header.append("cj")
-                vertical_header.extend(basis_variables)
-                vertical_header.append("zj")
-                if command.lower() == "minimize":
-                    vertical_header.append("zj-cj")
+            c = [float(str(self.txF1.text()).replace(',', '.')), float(str(self.txF2.text()).replace(',', '.')),
+                 float(str(self.txF3.text()).replace(',', '.')), float(str(self.txF4.text()).replace(',', '.'))]
+            A = [[float(str(self.txR11.text()).replace(',', '.')), float(str(self.txR12.text()).replace(',', '.')),
+                  float(str(self.txR13.text()).replace(',', '.')), float(str(self.txR14.text()).replace(',', '.'))],
+                 [float(str(self.txR21.text()).replace(',', '.')), float(str(self.txR22.text()).replace(',', '.')),
+                  float(str(self.txR23.text()).replace(',', '.')), float(str(self.txR24.text()).replace(',', '.'))],
+                 [float(str(self.txR31.text()).replace(',', '.')), float(str(self.txR32.text()).replace(',', '.')),
+                  float(str(self.txR33.text()).replace(',', '.')), float(str(self.txR34.text()).replace(',', '.'))]]
+            b = [float(str(self.txB1.text()).replace(',', '.')), float(str(self.txB2.text()).replace(',', '.')),
+                 float(str(self.txB3.text()).replace(',', '.'))]
+            if self.cbObjetivo.currentIndex() == 0:
+                c = multiply(c, -1)
+            if self.cbS1.currentIndex() == 1:
+                A[0] = multiply(A[0], -1)
+                b[0] = multiply(b[0], -1)
+            if self.cbS2.currentIndex() == 1:
+                A[1] = multiply(A[1], -1)
+                b[1] = multiply(b[1], -1)
+            if self.cbS3.currentIndex() == 1:
+                A[2] = multiply(A[2], -1)
+                b[2] = multiply(b[2], -1)
+            xi_bounds = (0, None)
+            res = linprog(c, A, b, bounds=(xi_bounds), options={"disp": False})
+            # print(str(res.fun * 100) + "g de Salada\n")
+            # print(res)
+            if res.status == 0:
+                self.statusbar.showMessage("Model Solution.")
+                if self.cbObjetivo.currentIndex() == 0:
+                    self.txResult.setText("Solution: " + str(res.fun*-1))
                 else:
-                    vertical_header.append("cj-zj")
-                self.update_gui_tableau(tableau, gui_tableau,current_row,vertical_header)
-                current_row, current_col = tableau.shape
-                current_row+= current_row
-
-                self.answers_label.setText(sp.display_answer_variables_and_values(tableau, basis_variables))
+                    self.txResult.setText("Solution: "+str(res.fun))
+                # coloca o result na área de texto
+                self.txResult.append("\nX1 = "+str(res.x[0])+
+                                        "\nX2 = "+str(res.x[1])+
+                                        "\nX3 = "+str(res.x[2])+
+                                        "\nX4 = "+str(res.x[3])+
+                                        "\nX5 = "+str(res.slack[0])+
+                                        "\nX6 = "+str(res.slack[1])+
+                                        "\nX7 = "+str(res.slack[2]))
+                self.tabWidget.setCurrentIndex(1)
+            elif res.status == 1:
+                self.statusbar.showMessage("Failed.")
+                self.tabWidget.setCurrentIndex(0)
+            elif res.status == 2:
+                self.statusbar.showMessage("Failed.")
+                self.tabWidget.setCurrentIndex(0)
             else:
-                w = QWidget()
-                QMessageBox.warning(w, "Warning","Problem is unbounded. Check problem formulation. Showing only iterations.")
-                self.answers_label.setText(" ")
-                break
+                self.statusbar.showMessage("Failed.")
+                self.tabWidget.setCurrentIndex(0)
+        except ValueError:
+            self.statusbar.showMessage("Failed.")
+        except Exception as erro:
+            self.statusbar.showMessage("Failed: "+str(erro))
 
-    def form_unaugmented_matrix(self):
-        obj_fxn = self.get_obj_fxn()
-        split1_of_constraints = self.read_table_items(self.constraint_table, 0, self.constraint_table.rowCount(), 0,
-                                                      self.constraint_table.columnCount() - 2)
-        split2_of_constraints = self.read_table_items(self.constraint_table, 0, self.constraint_table.rowCount(),
-                                                      self.constraint_table.columnCount() - 1,
-                                                      self.constraint_table.columnCount())
-        unaugmented_matrix_without_obj_fxn = np.concatenate((np.array(split2_of_constraints), split1_of_constraints),
-                                                            axis=1)
-        unaugmented_matrix = np.vstack((obj_fxn, unaugmented_matrix_without_obj_fxn))
-        return unaugmented_matrix
+    def setupUi(self, MainWindow):
+        MainWindow.setObjectName("MainWindow")
+        MainWindow.setFixedSize(690, 330)
 
-    def read_table_items(self,table,start_row,end_row,start_col, end_col):
-        read_table = np.zeros((end_row-start_row, end_col-start_col),dtype=sympy.Symbol)
-        for i in range(start_row,end_row):
-            for j in range(start_col,end_col):
-                read_table[i-end_row][j-end_col] = float(table.item(i, j).text())
+        self.centralwidget = QtWidgets.QWidget(MainWindow)
+        self.centralwidget.setObjectName("centralwidget")
+        self.tabWidget = QtWidgets.QTabWidget(self.centralwidget)
+        self.tabWidget.setGeometry(QtCore.QRect(0, 0, 668, 281))
+        self.tabWidget.setObjectName("tabWidget")
+        self.tabModel = QtWidgets.QWidget()
+        self.tabModel.setObjectName("tabModel")
+        self.cbObjetivo = QtWidgets.QComboBox(self.tabModel)
+        self.cbObjetivo.setGeometry(QtCore.QRect(370, 10, 71, 21))
+        self.cbObjetivo.setAutoFillBackground(False)
+        self.cbObjetivo.setObjectName("cbObjetivo")
+        self.cbObjetivo.addItem("")
+        self.cbObjetivo.addItem("")
 
-        return read_table
+        self.txF1 = QtWidgets.QLineEdit(self.tabModel)
+        self.txF1.setGeometry(QtCore.QRect(100, 40, 91, 20))
+        self.txF1.setAutoFillBackground(False)
+        self.txF1.setObjectName("txF1")
+        self.txF2 = QtWidgets.QLineEdit(self.tabModel)
+        self.txF2.setGeometry(QtCore.QRect(230, 40, 91, 20))
+        self.txF2.setAutoFillBackground(False)
+        self.txF2.setObjectName("txF2")
+        self.txF3 = QtWidgets.QLineEdit(self.tabModel)
+        self.txF3.setGeometry(QtCore.QRect(360, 40, 91, 20))
+        self.txF3.setAutoFillBackground(False)
+        self.txF3.setObjectName("txF3")
+        self.txF4 = QtWidgets.QLineEdit(self.tabModel)
+        self.txF4.setGeometry(QtCore.QRect(490, 40, 91, 20))
+        self.txF4.setAutoFillBackground(False)
+        self.txF4.setObjectName("txF4")
 
-    def read_equality_signs(self,equality_signs_column,table):
-        equality_signs=[]
-        for i in range(table.rowCount()):
-            equality_signs.append(table.cellWidget(i, equality_signs_column).currentText())
-        return equality_signs
+        self.txR11 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR11.setGeometry(QtCore.QRect(10, 100, 91, 20))
+        self.txR11.setAutoFillBackground(False)
+        self.txR11.setObjectName("txR11")
+        self.txR12 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR12.setGeometry(QtCore.QRect(140, 100, 91, 20))
+        self.txR12.setAutoFillBackground(False)
+        self.txR12.setObjectName("txR12")
+        self.txR13 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR13.setGeometry(QtCore.QRect(270, 100, 91, 20))
+        self.txR13.setAutoFillBackground(False)
+        self.txR13.setObjectName("txR13")
+        self.txR14 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR14.setGeometry(QtCore.QRect(400, 100, 91, 20))
+        self.txR14.setAutoFillBackground(False)
+        self.txR14.setObjectName("txR14")
+        self.cbS1 = QtWidgets.QComboBox(self.tabModel)
+        self.cbS1.setGeometry(QtCore.QRect(520, 100, 31, 21))
+        self.cbS1.setAutoFillBackground(False)
+        self.cbS1.setObjectName("cbS1")
+        self.cbS1.addItem("")
+        self.cbS1.addItem("")
+        self.cbS1.addItem("")
+        self.txB1 = QtWidgets.QLineEdit(self.tabModel)
+        self.txB1.setGeometry(QtCore.QRect(560, 100, 91, 20))
+        self.txB1.setAutoFillBackground(False)
+        self.txB1.setObjectName("txB1")
 
-    def populatetable(self,table, mylist, start_row, end_row, start_col, end_col):
-        for i in range(start_row, end_row):
-            for j in range(start_col, end_col):
-                table.setItem(i, j, QTableWidgetItem(str(mylist[i - end_row][j - end_col])))
-        table.resizeColumnsToContents()
+        self.txR21 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR21.setGeometry(QtCore.QRect(10, 130, 91, 20))
+        self.txR21.setAutoFillBackground(False)
+        self.txR21.setObjectName("txR21")
+        self.txR22 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR22.setGeometry(QtCore.QRect(140, 130, 91, 20))
+        self.txR22.setAutoFillBackground(False)
+        self.txR22.setObjectName("txR22")
+        self.txR23 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR23.setGeometry(QtCore.QRect(270, 130, 91, 20))
+        self.txR23.setAutoFillBackground(False)
+        self.txR23.setObjectName("txR23")
+        self.txR24 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR24.setGeometry(QtCore.QRect(400, 130, 91, 20))
+        self.txR24.setAutoFillBackground(False)
+        self.txR24.setObjectName("txR24")
+        self.cbS2 = QtWidgets.QComboBox(self.tabModel)
+        self.cbS2.setGeometry(QtCore.QRect(520, 130, 31, 21))
+        self.cbS2.setAutoFillBackground(False)
+        self.cbS2.setObjectName("cbS2")
+        self.cbS2.addItem("")
+        self.cbS2.addItem("")
+        self.cbS2.addItem("")
+        self.txB2 = QtWidgets.QLineEdit(self.tabModel)
+        self.txB2.setGeometry(QtCore.QRect(560, 130, 91, 20))
+        self.txB2.setAutoFillBackground(False)
+        self.txB2.setObjectName("txB2")
 
-    def get_obj_fxn(self):
-        obj_fxn_coeff=self.read_table_items(self.objective_fxn_table, 0,self.objective_fxn_table.rowCount(), 0, self.objective_fxn_table.columnCount()-2)
-        obj_fxn = np.insert(obj_fxn_coeff,0,0)
-        return obj_fxn
+        self.txR31 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR31.setGeometry(QtCore.QRect(10, 160, 91, 20))
+        self.txR31.setAutoFillBackground(False)
+        self.txR31.setObjectName("txR31")
+        self.txR32 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR32.setGeometry(QtCore.QRect(140, 160, 91, 20))
+        self.txR32.setAutoFillBackground(False)
+        self.txR32.setObjectName("txR32")
+        self.txR33 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR33.setGeometry(QtCore.QRect(270, 160, 91, 20))
+        self.txR33.setAutoFillBackground(False)
+        self.txR33.setObjectName("txR33")
+        self.txR34 = QtWidgets.QLineEdit(self.tabModel)
+        self.txR34.setGeometry(QtCore.QRect(400, 160, 91, 20))
+        self.txR34.setAutoFillBackground(False)
+        self.txR34.setObjectName("txR34")
+        self.cbS3 = QtWidgets.QComboBox(self.tabModel)
+        self.cbS3.setGeometry(QtCore.QRect(520, 160, 31, 21))
+        self.cbS3.setAutoFillBackground(False)
+        self.cbS3.setObjectName("cbS3")
+        self.cbS3.addItem("")
+        self.cbS3.addItem("")
+        self.cbS3.addItem("")
+        self.txB3 = QtWidgets.QLineEdit(self.tabModel)
+        self.txB3.setGeometry(QtCore.QRect(560, 160, 91, 20))
+        self.txB3.setAutoFillBackground(False)
+        self.txB3.setObjectName("txB3")
 
-    def create_gui_for_tableau(self,tableau,all_variables,vertical_headers):
-        rows,cols=tableau.shape
-        gui_tableau=self.create_table(rows, cols, equality_signs=None,horizontal_headers=all_variables,vertical_headers=vertical_headers)
-        self.populatetable(gui_tableau, tableau, 0,rows, 0, cols)
-        return gui_tableau
 
-    def update_gui_tableau(self,tableau,gui_tableau,current_row,vertical_headers):
-        #create new rows and cols
-        rows, cols = tableau.shape
-        for i in range(rows):
-            gui_tableau.insertRow(gui_tableau.rowCount())
-        self.populatetable(gui_tableau, tableau, current_row, current_row+rows, 0,cols)
-        gui_tableau.setVerticalHeaderLabels(vertical_headers)
+        self.label_20 = QtWidgets.QLabel(self.tabModel)
+        self.label_20.setGeometry(QtCore.QRect(10, 190, 641, 21))
+        self.label_20.setAutoFillBackground(False)
+        self.label_20.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_20.setAlignment(QtCore.Qt.AlignCenter)
+        self.label_20.setObjectName("label_20")
+        self.label_3 = QtWidgets.QLabel(self.tabModel)
+        self.label_3.setGeometry(QtCore.QRect(330, 40, 31, 21))
+        self.label_3.setAutoFillBackground(False)
+        self.label_3.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_3.setObjectName("label_3")
+        self.label_19 = QtWidgets.QLabel(self.tabModel)
+        self.label_19.setGeometry(QtCore.QRect(10, 70, 641, 21))
+        self.label_19.setAutoFillBackground(False)
+        self.label_19.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_19.setAlignment(QtCore.Qt.AlignCenter)
+        self.label_19.setObjectName("label_19")
+        self.label = QtWidgets.QLabel(self.tabModel)
+        self.label.setGeometry(QtCore.QRect(220, 10, 141, 21))
+        self.label.setAutoFillBackground(False)
+        self.label.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label.setObjectName("label")
+        self.label_4 = QtWidgets.QLabel(self.tabModel)
+        self.label_4.setGeometry(QtCore.QRect(460, 40, 31, 21))
+        self.label_4.setAutoFillBackground(False)
+        self.label_4.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_4.setObjectName("label_4")
+        self.label_10 = QtWidgets.QLabel(self.tabModel)
+        self.label_10.setGeometry(QtCore.QRect(500, 100, 21, 21))
+        self.label_10.setAutoFillBackground(False)
+        self.label_10.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_10.setObjectName("label_10")
+        self.label_11 = QtWidgets.QLabel(self.tabModel)
+        self.label_11.setGeometry(QtCore.QRect(110, 130, 31, 21))
+        self.label_11.setAutoFillBackground(False)
+        self.label_11.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_11.setObjectName("label_11")
+        self.label_6 = QtWidgets.QLabel(self.tabModel)
+        self.label_6.setGeometry(QtCore.QRect(50, 40, 41, 21))
+        self.label_6.setAutoFillBackground(False)
+        self.label_6.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_6.setObjectName("label_6")
+        self.label_5 = QtWidgets.QLabel(self.tabModel)
+        self.label_5.setGeometry(QtCore.QRect(590, 40, 21, 21))
+        self.label_5.setAutoFillBackground(False)
+        self.label_5.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_5.setObjectName("label_5")
+        self.label_9 = QtWidgets.QLabel(self.tabModel)
+        self.label_9.setGeometry(QtCore.QRect(240, 100, 31, 21))
+        self.label_9.setAutoFillBackground(False)
+        self.label_9.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_9.setObjectName("label_9")
+        self.label_7 = QtWidgets.QLabel(self.tabModel)
+        self.label_7.setGeometry(QtCore.QRect(370, 100, 31, 21))
+        self.label_7.setAutoFillBackground(False)
+        self.label_7.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_7.setObjectName("label_7")
+        self.label_12 = QtWidgets.QLabel(self.tabModel)
+        self.label_12.setGeometry(QtCore.QRect(240, 130, 31, 21))
+        self.label_12.setAutoFillBackground(False)
+        self.label_12.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_12.setObjectName("label_12")
+        self.label_15 = QtWidgets.QLabel(self.tabModel)
+        self.label_15.setGeometry(QtCore.QRect(110, 160, 31, 21))
+        self.label_15.setAutoFillBackground(False)
+        self.label_15.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_15.setObjectName("label_15")
+        self.label_18 = QtWidgets.QLabel(self.tabModel)
+        self.label_18.setGeometry(QtCore.QRect(500, 160, 21, 21))
+        self.label_18.setAutoFillBackground(False)
+        self.label_18.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_18.setObjectName("label_18")
+        self.label_17 = QtWidgets.QLabel(self.tabModel)
+        self.label_17.setGeometry(QtCore.QRect(370, 160, 31, 21))
+        self.label_17.setAutoFillBackground(False)
+        self.label_17.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_17.setObjectName("label_17")
+        self.label_16 = QtWidgets.QLabel(self.tabModel)
+        self.label_16.setGeometry(QtCore.QRect(240, 160, 31, 21))
+        self.label_16.setAutoFillBackground(False)
+        self.label_16.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_16.setObjectName("label_16")
+        self.label_13 = QtWidgets.QLabel(self.tabModel)
+        self.label_13.setGeometry(QtCore.QRect(370, 130, 31, 21))
+        self.label_13.setAutoFillBackground(False)
+        self.label_13.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_13.setObjectName("label_13")
+        self.label_14 = QtWidgets.QLabel(self.tabModel)
+        self.label_14.setGeometry(QtCore.QRect(500, 130, 21, 21))
+        self.label_14.setAutoFillBackground(False)
+        self.label_14.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_14.setObjectName("label_14")
+        self.label_2 = QtWidgets.QLabel(self.tabModel)
+        self.label_2.setGeometry(QtCore.QRect(200, 40, 31, 21))
+        self.label_2.setAutoFillBackground(False)
+        self.label_2.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_2.setObjectName("label_2")
+        self.label_8 = QtWidgets.QLabel(self.tabModel)
+        self.label_8.setGeometry(QtCore.QRect(110, 100, 31, 21))
+        self.label_8.setAutoFillBackground(False)
+        self.label_8.setFrameShadow(QtWidgets.QFrame.Sunken)
+        self.label_8.setObjectName("label_8")
+
+        self.btCalculate = QtWidgets.QPushButton(self.tabModel)
+        self.btCalculate.setGeometry(QtCore.QRect(290, 220, 81, 23))
+        self.btCalculate.setObjectName("btCalculate")
+        self.tabWidget.addTab(self.tabModel, "")
+        self.tabResult = QtWidgets.QWidget()
+        self.tabResult.setObjectName("tabResult")
+        self.txResult = QtWidgets.QTextEdit(self.tabResult)
+        self.txResult.setGeometry(QtCore.QRect(0, 0, 661, 251))
+        self.txResult.setObjectName("txResult")
+        self.txResult.setReadOnly(True)
+        self.txResult.setFontPointSize(16)
+        self.tabWidget.addTab(self.tabResult, "")
+        MainWindow.setCentralWidget(self.centralwidget)
+        self.menubar = QtWidgets.QMenuBar(MainWindow)
+        self.menubar.setGeometry(QtCore.QRect(0, 0, 667, 21))
+        self.menubar.setObjectName("menubar")
+        self.menuMain = QtWidgets.QMenu(self.menubar)
+        self.menuMain.setObjectName("menuMain")
+        MainWindow.setMenuBar(self.menubar)
+        self.statusbar = QtWidgets.QStatusBar(MainWindow)
+        self.statusbar.setObjectName("statusbar")
+        MainWindow.setStatusBar(self.statusbar)
+        self.actionNew = QtWidgets.QAction(MainWindow)
+        self.actionNew.setObjectName("actionNew")
+        self.actionSair = QtWidgets.QAction(MainWindow)
+        self.actionSair.setObjectName("actionSair")
+        self.menuMain.addAction(self.actionNew)
+        self.menuMain.addSeparator()
+        self.menuMain.addAction(self.actionSair)
+        self.menubar.addAction(self.menuMain.menuAction())
+        self.msg = QtWidgets.QMessageBox(MainWindow)
+        self.msg.setIcon(QtWidgets.QMessageBox.Question)
+        self.msg.setStandardButtons(QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel)
+
+        self.retranslateUi(MainWindow)
+        self.tabWidget.setCurrentIndex(0)
+        self.actionSair.triggered.connect(lambda : MainWindow.close())
+        self.actionNew.triggered.connect(lambda : self.new())
+        self.btCalculate.clicked.connect(lambda : self.calculate())
+        QtCore.QMetaObject.connectSlotsByName(MainWindow)
+
+    def retranslateUi(self, MainWindow):
+        _translate = QtCore.QCoreApplication.translate
+        MainWindow.setWindowTitle(_translate("MainWindow", "Simplex"))
+        self.label_20.setText(_translate("MainWindow", "X1, X2, X3, X4 ≥ 0"))
+        self.label_3.setText(_translate("MainWindow", "X2 +"))
+        self.label_19.setText(_translate("MainWindow", "Restrições:"))
+        self.cbS3.setItemText(0, _translate("MainWindow", "≤"))
+        self.cbS3.setItemText(1, _translate("MainWindow", "≥"))
+        self.cbS3.setItemText(2, _translate("MainWindow", "="))
+        self.label.setText(_translate("MainWindow", "Objective"))
+        self.label_4.setText(_translate("MainWindow", "X3 +"))
+        self.cbS1.setItemText(0, _translate("MainWindow", "≤"))
+        self.cbS1.setItemText(1, _translate("MainWindow", "≥"))
+        self.cbS1.setItemText(2, _translate("MainWindow", "="))
+        self.label_10.setText(_translate("MainWindow", "X4"))
+        self.label_11.setText(_translate("MainWindow", "X1 +"))
+        self.label_6.setText(_translate("MainWindow", "f(x):"))
+        self.label_5.setText(_translate("MainWindow", "X4"))
+        self.label_9.setText(_translate("MainWindow", "X2 +"))
+        self.label_7.setText(_translate("MainWindow", "X3 +"))
+        self.cbObjetivo.setItemText(0, _translate("MainWindow", "Max"))
+        self.cbObjetivo.setItemText(1, _translate("MainWindow", "Min"))
+        self.label_12.setText(_translate("MainWindow", "X2 +"))
+        self.label_15.setText(_translate("MainWindow", "X1 +"))
+        self.cbS2.setItemText(0, _translate("MainWindow", "≤"))
+        self.cbS2.setItemText(1, _translate("MainWindow", "≥"))
+        self.cbS2.setItemText(2, _translate("MainWindow", "="))
+        self.label_18.setText(_translate("MainWindow", "X4"))
+        self.label_17.setText(_translate("MainWindow", "X3 +"))
+        self.label_16.setText(_translate("MainWindow", "X2 +"))
+        self.label_14.setText(_translate("MainWindow", "X4"))
+        self.label_2.setText(_translate("MainWindow", "X1 +"))
+        self.label_8.setText(_translate("MainWindow", "X1 +"))
+        self.label_13.setText(_translate("MainWindow", "X3 +"))
+        self.btCalculate.setText(_translate("MainWindow", "Calculate"))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tabModel), _translate("MainWindow", "Model"))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tabResult), _translate("MainWindow", "Result"))
+        self.menuMain.setTitle(_translate("MainWindow", "Main"))
+        self.actionNew.setText(_translate("MainWindow", "New"))
+        self.actionNew.setShortcut(_translate("MainWindow", "Ctrl+N"))
+        self.actionSair.setText(_translate("MainWindow", "Sair"))
+        self.actionSair.setShortcut(_translate("MainWindow", "Esc"))
 
 
 if __name__ == "__main__":
     import sys
-    app = QApplication(sys.argv)
-    mw = MainWindow()
-    mw.show()
-    sys.exit(app.exec())
+    app = QtWidgets.QApplication(sys.argv)
+    MainWindow = QtWidgets.QMainWindow()
+    MainWindow.setWindowIcon(QtGui.QIcon("python.ico"))
+
+    ui = Ui_MainWindow()
+    ui.setupUi(MainWindow)
+    
+    MainWindow.show()
+    sys.exit(app.exec_())
