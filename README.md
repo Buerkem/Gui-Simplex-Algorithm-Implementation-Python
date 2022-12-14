@@ -8,3 +8,5 @@ Augment.py - Contains functions for augmenting the problem, deriving basis varia
 needed to form the simplex tableau
 Console.py - Console version
 Gui.py - Gui version
+
+![Alt text](./sample_image.png?raw=true "Screenshot of Solver")
